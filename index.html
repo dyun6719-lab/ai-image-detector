@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 생성 이미지 판별기</title>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --sub:#5b6475; --line:#e3e6ec;
+          --real:#2f7de1; --fake:#e0523f; --warn:#b7791f; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+         background:var(--bg); color:var(--ink); line-height:1.55; }
+  main { max-width: 880px; margin: 0 auto; padding: 32px 20px 48px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  .lead { color: var(--sub); margin: 0 0 22px; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
+  .drop { border:2px dashed #b9c0cc; border-radius:12px; min-height:260px; display:flex;
+          align-items:center; justify-content:center; text-align:center; cursor:pointer;
+          color:var(--sub); position:relative; overflow:hidden; background:#fafbfc; }
+  .drop.over { border-color: var(--real); background:#eef5ff; }
+  .drop img { max-width:100%; max-height:320px; display:block; }
+  .btn { margin-top:12px; width:100%; padding:12px; font-size:16px; font-weight:600; border:0;
+         border-radius:10px; background:var(--ink); color:#fff; cursor:pointer; }
+  .btn:disabled { background:#9aa1ad; cursor:not-allowed; }
+  .status { font-size:14px; color:var(--sub); margin-top:10px; min-height:20px; }
+  .verdict { font-size:22px; font-weight:700; margin: 4px 0 14px; }
+  .bar { height: 30px; border-radius: 8px; background:#edf0f4; overflow:hidden; display:flex; }
+  .bar div { height:100%; transition: width .5s; }
+  .legend { display:flex; justify-content:space-between; font-size:14px; margin-top:6px; }
+  .err { color: var(--fake); font-weight:600; }
+  .warn { color: var(--warn); font-size:14px; margin-top:10px; }
+  .muted { color: var(--sub); font-size: 13px; }
+  ol { padding-left: 20px; margin: 6px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🔍 AI 생성 이미지 판별기</h1>
+  <p class="lead">이미지를 올리면 <b>AI가 만든 이미지인지, 실제 사진인지</b> 확률로 알려줍니다.
+  직접 학습한 ResNet-50 모델이 <b>브라우저 안에서</b> 실행되므로 이미지가 서버로 전송되지 않아요.</p>
+
+  <div class="grid">
+    <section class="card">
+      <div id="drop" class="drop" tabindex="0">
+        <div id="dropText">여기에 이미지를 끌어다 놓거나<br><b>클릭해서 선택</b>하세요<br>
+          <span class="muted">JPG · PNG · WEBP, 가로·세로 128px 이상</span></div>
+      </div>
+      <input id="file" type="file" accept="image/*" hidden>
+      <button id="run" class="btn" disabled>모델 불러오는 중…</button>
+      <div id="status" class="status"></div>
+    </section>
+
+    <section class="card">
+      <div id="result">
+        <div class="verdict" style="color:var(--sub)">결과가 여기에 표시돼요</div>
+        <div class="bar"><div id="barFake" style="width:0;background:var(--fake)"></div>
+          <div id="barReal" style="width:0;background:var(--real)"></div></div>
+        <div class="legend"><span>🤖 AI 생성 <b id="pFake">–</b></span><span>📷 실제 사진 <b id="pReal">–</b></span></div>
+        <div id="warn" class="warn"></div>
+      </div>
+      <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+      <b>사용법</b>
+      <ol class="muted">
+        <li>왼쪽 칸에 이미지를 올립니다.</li>
+        <li><b>판별하기</b>를 누릅니다. (처음 한 번은 모델 다운로드로 10~30초 걸려요)</li>
+        <li>AI 생성 확률이 50% 이상이면 AI 이미지로 판정합니다.</li>
+      </ol>
+    </section>
+  </div>
+
+  <p class="muted" style="margin-top:22px">
+    ⚠️ 이 모델은 Stable Diffusion·Midjourney·DALL-E·DeepFloyd IF 등의 이미지로 학습되었습니다.
+    최신 생성기나 심하게 편집·압축된 이미지에서는 틀릴 수 있으니 참고용으로만 사용하세요.
+  </p>
+</main>
+
+<script>
+// ===== 설정: 학습 노트북(02_train_eval)과 동일 =====
+// 모델 파일(90MB)은 Hugging Face Model 저장소에 보관 (과제 규정: 100MB 이상 파일은 HF Hub)
+const MODEL_URLS = [
+  'https://huggingface.co/jun60287/ai-image-detector/resolve/main/resnet50.onnx',
+  'resnet50.onnx'    // 같은 폴더에 둔 경우 (로컬 테스트용)
+];
+const SIZE = 256, CROP = 224, JPEG_Q = 0.9, MIN_SIDE = 128, THRESHOLD = 0.5;
+const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
+
+const $ = id => document.getElementById(id);
+let session = null, currentImg = null;
+
+function setStatus(msg, isErr = false) {
+  $('status').innerHTML = isErr ? `<span class="err">${msg}</span>` : msg;
+}
+
+async function loadModel() {
+  for (const url of MODEL_URLS) {
+    try {
+      setStatus('모델 불러오는 중… (약 90MB, 처음 한 번만)');
+      session = await ort.InferenceSession.create(url, { executionProviders: ['wasm'] });
+      setStatus('✅ 모델 준비 완료. 이미지를 올려주세요.');
+      $('run').textContent = '판별하기';
+      $('run').disabled = !currentImg;
+      return;
+    } catch (e) { console.warn('모델 로드 실패:', url, e); }
+  }
+  setStatus('모델을 불러오지 못했어요. 새로고침 해주세요.', true);
+  $('run').textContent = '모델 로드 실패';
+}
+
+function loadImage(src) {
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = () => rej(new Error('이미지를 읽을 수 없어요.'));
+    im.src = src;
+  });
+}
+
+function handleFile(f) {
+  if (!f) return;
+  if (!f.type.startsWith('image/')) {
+    setStatus('이미지 파일만 올릴 수 있어요. (JPG · PNG · WEBP)', true); return;
+  }
+  const url = URL.createObjectURL(f);
+  loadImage(url).then(im => {
+    if (Math.min(im.naturalWidth, im.naturalHeight) < MIN_SIDE) {
+      setStatus(`이미지가 너무 작아요 (${im.naturalWidth}×${im.naturalHeight}). 가로·세로 ${MIN_SIDE}px 이상 이미지를 올려주세요.`, true);
+      currentImg = null; $('run').disabled = true; return;
+    }
+    currentImg = im;
+    $('drop').innerHTML = ''; $('drop').appendChild(im);
+    setStatus(session ? '이미지 준비 완료. <b>판별하기</b>를 누르세요.' : '이미지 준비 완료. 모델을 불러오는 중이에요…');
+    $('run').disabled = !session;
+  }).catch(e => setStatus(e.message, true));
+}
+
+// 학습 때와 같은 전처리: 짧은 변 256 리사이즈 → 가운데 256 정사각 → JPEG(90) → 가운데 224 크롭 → 정규화
+async function preprocess(im) {
+  const w = im.naturalWidth, h = im.naturalHeight, s = SIZE / Math.min(w, h);
+  const rw = Math.max(SIZE, Math.round(w * s)), rh = Math.max(SIZE, Math.round(h * s));
+  const c1 = document.createElement('canvas'); c1.width = SIZE; c1.height = SIZE;
+  const g1 = c1.getContext('2d'); g1.imageSmoothingQuality = 'high';
+  g1.drawImage(im, -Math.floor((rw - SIZE) / 2), -Math.floor((rh - SIZE) / 2), rw, rh);
+  const jpg = await loadImage(c1.toDataURL('image/jpeg', JPEG_Q));
+  const c2 = document.createElement('canvas'); c2.width = CROP; c2.height = CROP;
+  const g2 = c2.getContext('2d');
+  const off = (SIZE - CROP) / 2;
+  g2.drawImage(jpg, -off, -off);
+  const { data } = g2.getImageData(0, 0, CROP, CROP);
+  const n = CROP * CROP, arr = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++) {
+    for (let ch = 0; ch < 3; ch++) arr[ch * n + i] = (data[i * 4 + ch] / 255 - MEAN[ch]) / STD[ch];
+  }
+  return new ort.Tensor('float32', arr, [1, 3, CROP, CROP]);
+}
+
+async function run() {
+  if (!currentImg) { setStatus('이미지를 먼저 올려주세요.', true); return; }
+  if (!session) { setStatus('모델이 아직 준비되지 않았어요.', true); return; }
+  $('run').disabled = true; setStatus('판별 중…');
+  try {
+    const x = await preprocess(currentImg);
+    const out = await session.run({ [session.inputNames[0]]: x });
+    const prob = out[session.outputNames[0]].data;   // [P(real), P(fake)]
+    const pFake = prob[1], pReal = prob[0];
+    const isFake = pFake >= THRESHOLD, conf = isFake ? pFake : pReal;
+    document.querySelector('.verdict').innerHTML = isFake
+      ? `🤖 <span style="color:var(--fake)">AI 생성 이미지</span>로 보여요`
+      : `📷 <span style="color:var(--real)">실제 사진</span>으로 보여요`;
+    document.querySelector('.verdict').style.color = 'var(--ink)';
+    $('barFake').style.width = (pFake * 100) + '%';
+    $('barReal').style.width = (pReal * 100) + '%';
+    $('pFake').textContent = (pFake * 100).toFixed(1) + '%';
+    $('pReal').textContent = (pReal * 100).toFixed(1) + '%';
+    $('warn').textContent = (pFake > 0.35 && pFake < 0.65)
+      ? '⚠️ 확신도가 낮아요. 원본 해상도의 다른 이미지로 다시 확인해보세요.' : '';
+    setStatus(`완료 (확신도 ${(conf * 100).toFixed(1)}%)`);
+  } catch (e) {
+    console.error(e); setStatus('판별 중 오류가 났어요: ' + e.message, true);
+  }
+  $('run').disabled = false;
+}
+
+const drop = $('drop');
+drop.onclick = () => $('file').click();
+drop.onkeydown = e => { if (e.key === 'Enter') $('file').click(); };
+$('file').onchange = e => handleFile(e.target.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); handleFile(e.dataTransfer.files[0]); };
+$('run').onclick = run;
+loadModel();
+</script>
+</body>
+</html>
