@@ -1,0 +1,17 @@
+# 노트북(01~03) 실행 환경 — Kaggle Notebook (Python 3.13, GPU T4 x2) 기준
+torch
+torchvision
+transformers
+diffusers
+accelerate
+datasets
+scikit-learn
+pandas
+numpy
+matplotlib
+pillow
+pillow-heif
+tqdm
+requests
+onnxruntime
+# 웹 서비스(index.html)는 브라우저에서 onnxruntime-web 1.20.1 (CDN)으로 실행되어 별도 설치가 필요 없습니다.

@@ -1,0 +1,2 @@
+이 폴더에 캡처 사진을 넣으세요.
+01_main.png, 02_real.png, 03_fake.png, 04_error_small.png, 05_error_type.png

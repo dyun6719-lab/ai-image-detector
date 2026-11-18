@@ -1,0 +1,11 @@
+{
+  "student_id": "202435134",
+  "name": "이현재",
+  "title": "AI 생성 이미지 판별기 (Real vs AI-Generated Image Detector)",
+  "github_url": "https://github.com/dyun6719-lab/ai-image-detector",
+  "demo_url": "https://ai-image-detector-delta-lac.vercel.app/",
+  "data_type": "image",
+  "training": "transfer_learning",
+  "models": ["ResNet-50 v1 (baseline)", "CLIP ViT-L/14 + MLP head (proposed)", "ResNet-50 v2 + faces (final, deployed)"],
+  "primary_metric": "F1"
+}
