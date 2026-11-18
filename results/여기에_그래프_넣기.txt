@@ -1,2 +1,0 @@
-이 폴더에 Kaggle 02_train_eval Output의 results 그래프(png)를 넣으세요.
-augmentation_examples.png, learning_curves.png, confusion_roc.png, accuracy_by_source.png, errors_real.png, errors_fake.png, before_after.png, collection_summary.png
